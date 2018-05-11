@@ -425,12 +425,12 @@ uint8_t move_objects () {
         stop_robot();
     }else if (data.dades[1] > threshold_center){
         object_center = 1;
-        turn_robot(ESQUERRA, velocitat_lenta);
+        hard_turn_robot(ESQUERRA, velocitat_lenta);
     }else if (data.dades[2] > max_threshold_lateral ){
         hard_turn_robot(ESQUERRA, velocitat_lenta);
         object_center = 0;
     }else if (data.dades[2] < min_threshold_lateral && !object_center){
-        hard_turn_robot(DRETA, velocitat_lenta);
+        turn_robot(DRETA, velocitat_lenta);
     }else{
         move_robot(ENDAVANT, velocitat_lenta);
     }
