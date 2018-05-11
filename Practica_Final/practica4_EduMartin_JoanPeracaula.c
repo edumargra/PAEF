@@ -17,17 +17,20 @@ char borrado[] = "               "; //una linea entera de 15 espacios en blanco
 uint8_t linea = 1;
 uint8_t estado = 0;
 uint8_t estado_anterior = 8;
-uint8_t moving = 1;
+uint8_t moving = 0;
 uint8_t Byte_Rebut = 0;
 uint16_t comptador = 0;
 uint16_t comptTimeOut = 0;
 typedef uint8_t byte;
 byte DadaLlegida_UART = 0;
-uint16_t velocitat_lenta = 0x005f;
-uint16_t velocitat_mitja = 0x01ff;
+uint16_t velocitat_lenta = 0x0155;
+uint16_t velocitat_mitja = 0x0200;
 uint16_t velocitat_rapida = 0x03ff;
-uint8_t distancia_paret = 0;
-uint8_t tolerancia = 10;
+uint8_t STOP_THRESHOLD = 200;
+uint8_t threshold_center;
+uint8_t min_threshold_lateral;
+uint8_t max_threshold_lateral;
+uint8_t object_center = 0;
 
 #define TXD2_READY (UCA2IFG & UCTXIFG)
 struct RxReturn {
@@ -42,8 +45,8 @@ struct Data {
 };
 
 //IDs
-uint8_t idML = 0x02;
-uint8_t idMR = 0x03;
+uint8_t idML = 0x03;
+uint8_t idMR = 0x02;
 uint8_t idS = 0x64;
 
 //Definicions (instruccions mòduls, adreces i constants)
@@ -64,6 +67,17 @@ uint8_t idS = 0x64;
 #define SENSOR_R 2
 
 
+void init_timer_TA0()
+{
+    //Configurem el timer
+    //***************************
+    TA0CTL |= TASSEL__ACLK; //Seleccionem ACLK
+    TA0CCR0 |= 32; //setejem el valor de CCR0 (el maxim del timer) per desenes de micro segons
+    TA0CCTL0 |= CCIE; //Habilitem les interrupcions del timer
+    TA0CCTL0 &= ~CCIFG; //Netegem el vector d'interrupcions
+
+}
+
 void init_timer_TA1()
 {
     //Configurem el timer
@@ -73,6 +87,10 @@ void init_timer_TA1()
     TA1CCTL0 |= CCIE; //Habilitem les interrupcions del timer
     TA1CCTL0 &= ~CCIFG; //Netegem el vector d'interrupcions
 
+}
+
+void activa_timerA0(){
+    TA0CTL |= MC__UP; //seleccionem el mode up i iniciem el timer
 }
 
 void Activa_TimerA1(){
@@ -256,6 +274,12 @@ void process_distance(uint8_t sensor) {
         P2OUT &= ~0x10;  //Led P2.4 (G) a 0 (apagat)
         P5OUT &= ~0x40; //Led P5.6(B) a 0 (apagat)
     }
+    sprintf(cadena, "LEFT %03d", data.dades[0]); // Guardamos en cadena la siguiente frase: error checksum
+    escribir(cadena, linea+2);          // Escribimos la cadena al LCD
+    sprintf(cadena, "CENTER %03d", data.dades[1]); // Guardamos en cadena la siguiente frase: error checksum
+    escribir(cadena, linea+3);          // Escribimos la cadena al LCD
+    sprintf(cadena, "RIGHT %03d", data.dades[2]); // Guardamos en cadena la siguiente frase: error checksum
+    escribir(cadena, linea+4);          // Escribimos la cadena al LCD
 }
 
 void activate_led(void) {
@@ -288,21 +312,32 @@ void stop_motor(uint8_t id){
 void move_robot(uint8_t sentit, uint16_t velocitat){
     moving = 1;
     if(sentit == ENDAVANT){
-        move_motor(idML,SENTIT_CW,velocitat);
-        move_motor(idMR,SENTIT_CCW,velocitat);
-    } else {
         move_motor(idML,SENTIT_CCW,velocitat);
         move_motor(idMR,SENTIT_CW,velocitat);
+    } else {
+        move_motor(idML,SENTIT_CW,velocitat);
+        move_motor(idMR,SENTIT_CCW,velocitat);
+    }
+}
+
+void hard_turn_robot(uint8_t sentit, uint16_t velocitat){
+    moving = 1;
+    if(sentit == ESQUERRA){
+        stop_motor(idML);
+        move_motor(idMR,SENTIT_CW,velocitat);
+    } else {
+        move_motor(idML,SENTIT_CCW,velocitat);
+        stop_motor(idMR);
     }
 }
 
 void turn_robot(uint8_t sentit, uint16_t velocitat){
     moving = 1;
     if(sentit == ESQUERRA){
-        move_motor(idML,SENTIT_CW,velocitat);
-        move_motor(idMR,SENTIT_CW,velocitat);
-    } else {
         move_motor(idML,SENTIT_CCW,velocitat);
+        move_motor(idMR,SENTIT_CW,velocitat_mitja);
+    } else {
+        move_motor(idML,SENTIT_CW,velocitat_mitja);
         move_motor(idMR,SENTIT_CCW,velocitat);
     }
 }
@@ -353,11 +388,28 @@ struct Data luminosity_sensor(uint8_t sensor) {
 
 void read_distance_wall(uint8_t sensor) {
     struct Data data = distance_sensor();
-    distancia_paret = data.dades[sensor];
+    uint8_t distancia = data.dades[sensor];
+    if (sensor == CENTRE) {
+        threshold_center = distancia;
+        sprintf(cadena, "Center done "); // Guardamos en cadena la siguiente frase: error checksum
+        escribir(cadena, linea+5);          // Escribimos la cadena al LCD
+    } else {
+        min_threshold_lateral = distancia;
+        max_threshold_lateral = distancia + distancia/10;
+        sprintf(cadena, "Lateral done"); // Guardamos en cadena la siguiente frase: error checksum
+        escribir(cadena, linea+5);          // Escribimos la cadena al LCD
+    }
 }
 
 uint8_t move_objects () {
     struct Data data = distance_sensor();
+
+    //Delay
+    uint8_t t = 0;
+    while(t < 100){
+        t++;
+    }
+
     if (data.checkSum){
         sprintf(cadena, "error checksum"); // Guardamos en cadena la siguiente frase: error checksum
         escribir(cadena, linea+1);          // Escribimos la cadena al LCD
@@ -366,15 +418,23 @@ uint8_t move_objects () {
         sprintf(cadena, "error timeout"); // Guardamos en cadena la siguiente frase: error timeout
         escribir(cadena, linea+1);          // Escribimos la cadena al LCD
         return 1;
-    } else if ((distancia_paret-tolerancia) < data.dades[0] && data.dades[0] < (distancia_paret+tolerancia)) {
-        move_robot(ENDAVANT, velocitat_lenta);
-    } else if ((distancia_paret-tolerancia) < data.dades[0]) {
-        turn_robot(DRETA, velocitat_lenta);
-    } else if (data.dades[0] < (distancia_paret+tolerancia)) {
-        turn_robot(ESQUERRA, velocitat_lenta);
     }
-    sprintf(cadena, "               "); // Guardamos en cadena la siguiente frase: error timeout
-    escribir(cadena, linea+1);          // Escribimos la cadena al LCD
+
+    //casualistica del wall-follower algorithm
+    if (data.dades[1] > STOP_THRESHOLD) {
+        stop_robot();
+    }else if (data.dades[1] > threshold_center){
+        object_center = 1;
+        turn_robot(ESQUERRA, velocitat_lenta);
+    }else if (data.dades[2] > max_threshold_lateral ){
+        hard_turn_robot(ESQUERRA, velocitat_lenta);
+        object_center = 0;
+    }else if (data.dades[2] < min_threshold_lateral && !object_center){
+        hard_turn_robot(DRETA, velocitat_lenta);
+    }else{
+        move_robot(ENDAVANT, velocitat_lenta);
+    }
+
     return 0;
 }
 
@@ -407,6 +467,9 @@ void init_interrupciones()
     //Int. port 5 = 39 corresponde al bit 7 del segundo registro ISERx:
     NVIC->ICPR[1] |= BIT7; //Primero, me aseguro de que no quede ninguna interrupcion residual pendiente para este puerto,
     NVIC->ISER[1] |= BIT7; //y habilito las interrupciones del puerto
+
+    NVIC->ICPR[0] |= BIT8; //Primer, ens assegurem que no quedi cap interrupció residual pendent pel timer TA0
+    NVIC->ISER[0] |= BIT8; //Habilitem les interrupcions del timer A0 a nivell NVIC
 
     NVIC->ICPR[0] |= BITA; //Primer, ens assegurem que no quedi cap interrupció residual pendent pel timer TA1
     NVIC->ISER[0] |= BITA; //Habilitem les interrupcions del timer A1 a nivell NVIC
@@ -519,6 +582,7 @@ void main(void)
     init_ucs_24MHz();       //Ajustes del clock (Unified Clock System)
     init_botons();         //Configuramos botones y leds
     init_LCD();             // Inicializamos la pantalla
+    init_timer_TA0();   //inicialitzem el timer TA0
     init_timer_TA1();   //inicialitzem el timer TA1
     init_interrupciones();  //Configurar y activar las interrupciones de los botones
     halLcdPrintLine(saludo, linea, INVERT_TEXT); //escribimos saludo en la primera linea
@@ -529,10 +593,11 @@ void main(void)
     //Bucle principal (infinito):
     do
     {
-        if(moving && distancia_paret){
+        if(moving && comptador >= 50 ){
+            process_distance(ESQUERRA);
             error = move_objects();
+            comptador = 0;
         }
-        process_distance(ESQUERRA);
         if (estado_anterior != estado)// Dependiendo del valor del estado se encenderï¿½ un LED u otro.
         {
             sprintf(cadena, "estado %d", estado); // Guardamos en cadena la siguiente frase: estado "valor del estado"
@@ -555,32 +620,35 @@ void main(void)
             case 1:
                 //Si polsem S1, encenem els 3 LEDs RGB segons la distància a la que es detecta un objecte amb el sensor
                 //process_distance(CENTRE);
-                read_distance_wall(ESQUERRA);
+                read_distance_wall(DRETA);
                 break;
 
             case 2:
                 //Si polsem S2, el robot fa stop
+                read_distance_wall(CENTRE);
                 stop_robot();
                 break;
 
             case 3:
                 //Si polsem el joystick  a l'esquerra, el robot gira sobre si mateix cap a l'esquerra
-                turn_robot(ESQUERRA, velocitat_mitja);
+                turn_robot(ESQUERRA, velocitat_lenta);
                 break;
 
             case 4:
                 //Si polsem el joystick  a la dreta, el robot gira sobre si mateix cap a la dreta
-                turn_robot(DRETA, velocitat_mitja);
+                turn_robot(DRETA, velocitat_lenta);
                 break;
 
             case 5:
                 //Si polsem el joystick  amunt, el robot avança
+                activa_timerA0();
                 move_robot(ENDAVANT, velocitat_lenta);
+                escribir(borrado, linea+5);          // Escribimos la cadena al LCD
                 break;
 
             case 6:
                 //Si polsem el joystick  avall, el robot retrocedeix
-                move_robot(ENDARRERE, velocitat_mitja);
+                move_robot(ENDARRERE, velocitat_lenta);
                 break;
 
             case 7:
@@ -589,6 +657,7 @@ void main(void)
                 break;
             }
         }
+
     }
     while (1); //Condicion para que el bucle sea infinito
 }
@@ -699,6 +768,14 @@ void PORT5_IRQHandler(void) { //interrupciï¿½n de los botones. Actualiza el valo
     ***********************************************/
 
     P5IE |= 0x32;   //interrupciones Joystick y S1 en port 5 reactivadas
+}
+
+void TA0_0_IRQHandler(void)
+{
+    TA0CCTL0 &= ~CCIE;//Convé inhabilitar la interrupció al començament
+    comptador++;    //Incrementem la variable global comptador
+    TA0CCTL0 &= ~CCIFG;//Hem de netejar el flagde la interrupció
+    TA0CCTL0 |= CCIE;//S’ha d’habilitar la interrupció abans de sortir
 }
 
 //Interrupció timer TimeOut
