@@ -704,6 +704,7 @@ void main(void)
     linea++; //Aumentamos el valor de linea y con ello pasamos a la linea siguiente
     init_UART();
     uint8_t error = 0;
+    Data dataRead;
 
     //Bucle principal (infinito):
     do
@@ -772,7 +773,8 @@ void main(void)
             }
         }
         
-        Data dataRead = moving_state_selector();
+        
+        dataRead = moving_state_selector();
         
         if (moving_state != prev_moving_state){
             prev_moving_state = moving_state;
