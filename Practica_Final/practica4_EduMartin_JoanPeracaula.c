@@ -1,6 +1,6 @@
 /******************************
  *
- * Practica_04_PAE Connexió al robot
+ * Practica_04_PAE Connexiï¿½ al robot
  * UB, 04/2018.
  *****************************/
 
@@ -17,20 +17,22 @@ char borrado[] = "               "; //una linea entera de 15 espacios en blanco
 uint8_t linea = 1;
 uint8_t estado = 0;
 uint8_t estado_anterior = 8;
-uint8_t moving = 0;
 uint8_t Byte_Rebut = 0;
 uint16_t comptador = 0;
 uint16_t comptTimeOut = 0;
 typedef uint8_t byte;
 byte DadaLlegida_UART = 0;
+
 uint16_t velocitat_lenta = 0x0155;
 uint16_t velocitat_mitja = 0x0200;
 uint16_t velocitat_rapida = 0x03ff;
+
 uint8_t STOP_THRESHOLD = 200;
 uint8_t threshold_center;
 uint8_t lateral_detection_threshold = 20;
 uint8_t min_threshold_lateral;
 uint8_t max_threshold_lateral;
+uint8_t sideWall = 2;//per defecte que segueixi la paret dreta
 
 #define TXD2_READY (UCA2IFG & UCTXIFG)
 struct RxReturn {
@@ -49,22 +51,37 @@ uint8_t idML = 0x03;
 uint8_t idMR = 0x02;
 uint8_t idS = 0x64;
 
-//Definicions (instruccions mòduls, adreces i constants)
+//Definicions (instruccions mï¿½duls, adreces i constants)
 #define WRITE 0x03
 #define READ 0x02
+//motor
 #define CW 0x06
 #define CCW 0x08
 #define MOVING_SPEED 0x20
+#define SENTIT_CW 0x04
+#define SENTIT_CCW 0x00
+//direccions del robot
 #define ENDAVANT 0x01
 #define ENDARRERE 0x00
 #define ESQUERRA 0x00
 #define CENTRE 0X01
 #define DRETA 0x02
-#define SENTIT_CW 0x04
-#define SENTIT_CCW 0x00
+//sensors
 #define SENSOR_L 0
 #define SENSOR_C 1
 #define SENSOR_R 2
+//estats del robot
+#define JAILED 0
+#define INTERIOR_TURN 1
+#define EXTERIOR_TURN 2
+#define TOO_NEAR 3
+#define TOO_CLOSE 4
+#define GO_STRAIGHT 5
+#define STOP 6
+#define INIT 7
+
+uint8_t moving_state = STOP;
+uint8_t prev_moving_state = INIT;
 
 
 void init_timer_TA0()
@@ -98,12 +115,16 @@ void Activa_TimerA1(){
 }
 
 uint8_t TimeOut(uint32_t limit){
-    //Funció que controla el timeout
+    //Funciï¿½ que controla el timeout
     return comptTimeOut >= limit;
 }
 
 void Reset_TimeOut(void){
     comptTimeOut = 0;
+}
+
+void reset_delay() {
+  comptador = 0;
 }
 
 void init_UART(void){
@@ -223,7 +244,7 @@ struct RxReturn RxPacket(void){
 
 struct RxReturn read_IR_sensor(void) {
     byte parametres[2];
-    parametres[0] = 0x1A;  //Adreça Left IR Sensor Data
+    parametres[0] = 0x1A;  //Adreï¿½a Left IR Sensor Data
     parametres[1] = 0x03;   //Llegim tres bytes: Left, Center i Right
     TxPacket(idS,0x02,READ,parametres);
     return RxPacket();
@@ -282,6 +303,7 @@ void process_distance(uint8_t sensor) {
     escribir(cadena, linea+4);          // Escribimos la cadena al LCD
 }
 
+//activem els leds dels motors
 void activate_led(void) {
     byte parametres[2];
     parametres[0] = 0x19;
@@ -290,9 +312,12 @@ void activate_led(void) {
     TxPacket(idMR,0x02,WRITE,parametres);
 }
 
+/* Metode per fer que un motor es mogui indefinidament.
+*  Te com a parametre la id del motor, el sentit i la velocitat a la que volem que es mogui
+*/
 void move_motor(uint8_t id, uint8_t sentit, uint16_t velocitat){
     byte parametres[3];
-    parametres[0] = MOVING_SPEED; //adreça MOVING_SPEED
+    parametres[0] = MOVING_SPEED; //adreï¿½a MOVING_SPEED
     parametres[1] = velocitat & 0xff; //parse de la velocitat(registre low) utilitzant una mascara i operacio binaria
     parametres[2] = (velocitat >> 8) & 0xff;//parse de la velocitat(registre high) utilitzant una mascara i operacio binaria
     parametres[2] |= sentit; //direction
@@ -300,15 +325,21 @@ void move_motor(uint8_t id, uint8_t sentit, uint16_t velocitat){
     RxPacket();
 }
 
+/*Para un motor
+* Te com a parametre la id del motor
+*/
 void stop_motor(uint8_t id){
     byte parametres[3];
-    parametres[0] = MOVING_SPEED; //adreça MOVING_SPEED
+    parametres[0] = MOVING_SPEED; //adreï¿½a MOVING_SPEED
     parametres[1] = 0x00; //speed value
     parametres[2] = 0x00; //speed value
     TxPacket(id,0x03,WRITE,parametres);
     RxPacket();
 }
 
+/* Mou el robot indefinidament cap a una direccio.
+*  Te com a parametres la direccio i la velocitat a la que volem que es mogui.
+*/
 void move_robot(uint8_t sentit, uint16_t velocitat){
     if(sentit == ENDAVANT){
         move_motor(idML,SENTIT_CCW,velocitat);
@@ -319,6 +350,9 @@ void move_robot(uint8_t sentit, uint16_t velocitat){
     }
 }
 
+/* Gir tancat que te com a eix una de les rodes del robot.
+*  Te com a parametres el sentit del gir i la velocitat
+*/
 void hard_turn_robot(uint8_t sentit, uint16_t velocitat){
     if(sentit == ESQUERRA){
         stop_motor(idML);
@@ -329,6 +363,9 @@ void hard_turn_robot(uint8_t sentit, uint16_t velocitat){
     }
 }
 
+/* Gir natural del robot.
+*  Te com parametres el sentit i la velocitat del gir.
+*/
 void turn_robot(uint8_t sentit, uint16_t velocitat){
     if(sentit == ESQUERRA){
         move_motor(idML,SENTIT_CCW,velocitat);
@@ -350,15 +387,15 @@ void turn_robot_90_degrees(uint8_t direction, uint16_t velocitat) {
     }
 }
 
+//Para el robot
 void stop_robot() {
-    moving = 0;
     stop_motor(idML);
     stop_motor(idMR);
 }
 
 struct RxReturn read_sound_sensor(void) {
     byte parametres[2];
-    parametres[0] = 0x25;  //Adreça Sound Count
+    parametres[0] = 0x25;  //Adreï¿½a Sound Count
     parametres[1] = 0x01;   //Llegim un byte
     TxPacket(idS,0x02,READ,parametres);
     return RxPacket();
@@ -376,7 +413,7 @@ struct Data sound_sensor() {
 
 struct RxReturn read_luminosity_sensor(void) {
     byte parametres[2];
-    parametres[0] = 0x1D;  //Adreça Luminosity
+    parametres[0] = 0x1D;  //Adreï¿½a Luminosity
     parametres[1] = 0x03;   //Llegim tres bytes (un per a cada sensor: Left, Center i Right)
     TxPacket(idS,0x02,READ,parametres);
     return RxPacket();
@@ -394,6 +431,10 @@ struct Data luminosity_sensor(uint8_t sensor) {
     return data;
 }
 
+/* Metode que utilitzem per inicialitzar els valors dels tresholds dels diferents sensors.
+*  Diferenciem entre el del centre i els laterals, tenin especial cura d aquest ultims, afegint
+*  una tolerancia d un 10 per cent.
+*/
 void read_distance_wall(uint8_t sensor) {
     struct Data data = distance_sensor();
     uint8_t distancia = data.dades[sensor];
@@ -408,43 +449,6 @@ void read_distance_wall(uint8_t sensor) {
         escribir(cadena, linea+5);          // Escribimos la cadena al LCD
     }
 }
-
-/*uint8_t move_objects () {
-    struct Data data = distance_sensor();
-
-    //Delay
-    uint8_t t = 0;
-    while(t < 100){
-        t++;
-    }
-
-    if (data.checkSum){
-        sprintf(cadena, "error checksum"); // Guardamos en cadena la siguiente frase: error checksum
-        escribir(cadena, linea+1);          // Escribimos la cadena al LCD
-        return 1;
-    } else if (data.timeOut) {
-        sprintf(cadena, "error timeout"); // Guardamos en cadena la siguiente frase: error timeout
-        escribir(cadena, linea+1);          // Escribimos la cadena al LCD
-        return 1;
-    }
-
-    //casualistica del wall-follower algorithm
-    if (data.dades[1] > STOP_THRESHOLD) {
-        stop_robot();
-    }else if (data.dades[1] > threshold_center){
-        object_center = 1;
-        hard_turn_robot(ESQUERRA, velocitat_lenta);
-    }else if (data.dades[2] > max_threshold_lateral ){
-        hard_turn_robot(ESQUERRA, velocitat_lenta);
-        object_center = 0;
-    }else if (data.dades[2] < min_threshold_lateral && !object_center){
-        turn_robot(DRETA, velocitat_lenta);
-    }else{
-        move_robot(ENDAVANT, velocitat_lenta);
-    }
-
-    return 0;
-}*/
 
 /**************************************************************************
  * INICIALIZACIï¿½N DEL CONTROLADOR DE INTERRUPCIONES (NVIC).
@@ -476,14 +480,14 @@ void init_interrupciones()
     NVIC->ICPR[1] |= BIT7; //Primero, me aseguro de que no quede ninguna interrupcion residual pendiente para este puerto,
     NVIC->ISER[1] |= BIT7; //y habilito las interrupciones del puerto
 
-    NVIC->ICPR[0] |= BIT8; //Primer, ens assegurem que no quedi cap interrupció residual pendent pel timer TA0
+    NVIC->ICPR[0] |= BIT8; //Primer, ens assegurem que no quedi cap interrupciï¿½ residual pendent pel timer TA0
     NVIC->ISER[0] |= BIT8; //Habilitem les interrupcions del timer A0 a nivell NVIC
 
-    NVIC->ICPR[0] |= BITA; //Primer, ens assegurem que no quedi cap interrupció residual pendent pel timer TA1
+    NVIC->ICPR[0] |= BITA; //Primer, ens assegurem que no quedi cap interrupciï¿½ residual pendent pel timer TA1
     NVIC->ISER[0] |= BITA; //Habilitem les interrupcions del timer A1 a nivell NVIC
 
-    NVIC->ICPR[0] |= BIT(18); //Primer, ens assegurem que no quedi cap interrupció residual pendent pel mòdul AX-S1
-    NVIC->ISER[0] |= BIT(18); //Habilitem les interrupcions del mòdul AX-S1 a nivell NVIC
+    NVIC->ICPR[0] |= BIT(18); //Primer, ens assegurem que no quedi cap interrupciï¿½ residual pendent pel mï¿½dul AX-S1
+    NVIC->ISER[0] |= BIT(18); //Habilitem les interrupcions del mï¿½dul AX-S1 a nivell NVIC
 
     __enable_interrupt(); //Habilitamos las interrupciones a nivel global del micro.
 }
@@ -582,8 +586,8 @@ void init_botons(void) {
 }
 
 struct Data moving_state_selector() {
-    Data dataRead = process_distance();
-    
+    Data dataRead = distance_sensor(); //mirem l'entorn del robot
+
     if (dataRead.checkSum){
         sprintf(cadena, "error checksum"); // Guardamos en cadena la siguiente frase: error checksum
         escribir(cadena, linea+1);          // Escribimos la cadena al LCD
@@ -594,96 +598,119 @@ struct Data moving_state_selector() {
         return 1;
     }
 
-    if (wall_on_left(dataRead.dades)) {
-        moving_state = 1;
-    } else if (wall_on_right(dataRead.dades)) {
-        moving_state = 2;
+    if (wall_jailing(dataRead.dades)) {
+        moving_state = JAILED; //aquest cas sempre voldra dir que esta en un lloc sense sortida
+    } else if (wall_narrow_path(dataRead.dades)){
+        moving_state = JAILED; //les parets al dos costat son massa estretes
     } else if (wall_on_front(dataRead.dades)) {
-        moving_state = 3;
-    } else if (wall_on_front_left_right(dataRead.dades)) {
-        moving_state = 4;
-    } else {
-        //Cap paret a davant
-        moving_state = 5;
+        moving_state = INTERIOR_TURN; //ara mateix tota la casualistica que pot haver-hi porta aquÃ­
+        //en un futur podriem afegir un estat que sigui "busca paret" llavors necessiteriem un if
+    } else if (wall_on_side_too_close(dataRead.dades)) {
+        moving_state = TOO_NEAR; //si ens allunyem del mur definit per la variable global, apropat
+    } else if (wall_on_side_too_far(dataRead.dades)) {
+        moving_state = TOO_CLOSE; //si ens apropem del mur definit per la variable global, allunyat
+    } else if (wall_on_side_perfect(dataRead.dades) {
+        moving_state = GO_STRAIGHT; //si tenim una bona distancia amb la paret segueix recta
+    } else
+        if(prev_moving_state == GO_STRAIGHT || prev_moving_state == TOO_NEAR || prev_moving_state == TOO_CLOSE){
+            moving_state = EXTERIOR_TURN;
+            //si estavem seguint una paret i de cop i volta no hi ha res, vol dir que estavem
+            //reseguint una cantonada per l'exterior
+        }
+        //TODO: pdriem afegir un altre estat que sigui "buscar paret" des del mig de lhabitacio
     }
-    
+
     return dataRead;
 }
-
-void follow_left(Data dataRead) {
-    
-    if (dataRead.dades[0] > max_threshold_lateral) {
-        hard_turn_robot(DRETA, velocitat_lenta);
-    } else if (dataRead.dades[0] < min_threshold_lateral) {
-        hard_turn_robot(ESQUERRA, velocitat_lenta);
-    } else {
-        move_robot(ENDAVANT, velocitat_lenta);
-    }
-    
+uint8_t wall_jailing(byte dades[3]){ //jail
+  return dades[0] >= max_threshold_lateral && dades[1] >= threshold_center && dades[2] >= threshold_center;
+}
+uint8_t wall_narrow_path(byte dades[3]){ //narrowing sides
+  return dades[0] >= max_threshold_lateral && dades[2] >= max_threshold_lateral ;
+}
+uint8_t wall_on_front(byte dades[3]){ //inner turn
+  return dades[1] >= threshold_center;
+}
+uint8_t wall_on_side_too_close(byte dades[3]){ //get farther from the wall
+  return dades[sideWall] >= max_threshold_lateral;
+}
+uint8_t wall_on_side_too_far(byte dades[3]){ //get closer to the wall
+  return dades[sideWall] < min_threshold_lateral;
+}
+uint8_t wall_on_side_perfect(byte dades[3]){ //go straight
+  return dades[sideWall] < max_threshold_lateral && dades[sideWall] > min_threshold_lateral;
 }
 
-void follow_right(Data dataRead) {
-    
-    if (dataRead.dades[2] > max_threshold_lateral) {
-        hard_turn_robot(ESQUERRA, velocitat_lenta);
-    } else if (dataRead.dades[2] < min_threshold_lateral) {
-        hard_turn_robot(DRETA, velocitat_lenta);
-    } else {
-        move_robot(ENDAVANT, velocitat_lenta);
+/*
+*Aquesta funcio la utilitzem per que el robot giri cap al canto contrari de la paret
+*que estava seguint.
+*No fa res mÃ©s que invertir la direcciÃ³ que porta el robot i crida a una altra funcio de girar
+*/
+void get_away() {
+    if (sideWall == ESQUERRA) { //Venim de paret a l'esquerra
+        turn_robot(DRETA, velocitat_lenta);
+    } else { //Venim de paret a la dreta
+        turn_robot(ESQUERRA, velocitat_lenta);
     }
-    
+
 }
 
-void change_robot_direction(Data dataRead) {
-    
-    if (prev_moving_state == 1) { //Venim de paret a l'esquerra
+/*
+*Aquesta funcio la utilitzem per que el robot giri cap al canto de la paret
+*que estava seguint.
+*No fa res mÃ©s que amagar el fet de saber la direccio que seguiem i crida a una altra funcio de girar
+*/
+void get_closer() {
+    if (sideWall == ESQUERRA) { //Venim de paret a l'esquerra
         turn_robot(ESQUERRA, velocitat_lenta);
-    } else if (prev_moving_state == 2) { //Venim de paret a la dreta
-        turn_robot(ESQUERRA, velocitat_lenta);
+    } else { //Venim de paret a la dreta
+        turn_robot(DRETA, velocitat_lenta);
     }
-    
+
 }
 
 uint8_t delay (uint8_t limit) {
     return comptador < limit;
 }
 
+/* Metode que utilitzem per guiar al robot fora de obstacles en forma de C o passos estrets.
+* Aquest metode pot ser molt util per quan no hi hagi suficient espai com per girar sobre si mateix.
+*/
 void go_back_find_way(Data dataRead) {
-
     uint8_t sensor;
     uint8_t direction;
-    
-    if (prev_moving_state == 1) { //Venim de paret a l'esquerra
+
+    if (sideWall == ESQUERRA) { //volem el sensor contrari a la paret que estem seguint
         sensor = 2;
-        direction = ESQUERRA;
-    } else if (prev_moving_state == 2) { //Venim de paret a la dreta
-        sensor = 0;
         direction = DRETA;
+    } else if (sideWall == DRETA) {
+        sensor = 0;
+        direction = ESQUERRA;
     }
-    
-    while (dataRead.dades[sensor] < lateral_detection_threshold) {
+
+    while (dataRead.dades[sensor] < lateral_detection_threshold) { //mentres estiguem encara engarjolats
         move_robot(ENDARRERE, velocitat_lenta);
         dataRead = process_distance();
     }
-    
-    turn_robot_90_degrees(direction, velocitat_lenta);
-    
-    comptador = 0;
+
+    turn_robot_90_degrees(direction, velocitat_lenta); //girarem 90 graus en direccio del sensor
+    reset_delay();
     while (delay(1000)); //Temps de gir 90 graus a velocitat_lenta
-    
-    move_robot(ENDAVANT, velocitat_lenta);
-    
-    comptador = 0;
+
+    move_robot(ENDAVANT, velocitat_lenta); //ens apropem a lobstacle
+    reset_delay();
     while (delay(1000)); //Temps de gir abans de trobar la paret de nou
 }
 
-void open_turn(Data dataRead) {
-    comptador = 0;
+/*Aquest metode el fem per fer girs exteriors
+* El delay es per deixar prou marge amb la cantonada
+*/
+void open_turn() {
+    reset_delay();
     while (delay(1000)); //Petit delay per agafar millor la curva
-    
-    if (prev_moving_state == 1) { //Venim de paret a l'esquerra
+    if (sideWall == ESQUERRA) { //Venim de paret a l'esquerra
         turn_robot(ESQUERRA, velocitat_lenta);
-    } else if (prev_moving_state == 2) { //Venim de paret a la dreta
+    } else { //Venim de paret a la dreta
         turn_robot(DRETA, velocitat_lenta);
     }
 }
@@ -709,11 +736,6 @@ void main(void)
     //Bucle principal (infinito):
     do
     {
-        /*if(moving && comptador >= 50 ){
-            process_distance(ESQUERRA);
-            error = move_objects();
-            comptador = 0;
-        }*/
         if (estado_anterior != estado)// Dependiendo del valor del estado se encenderï¿½ un LED u otro.
         {
             sprintf(cadena, "estado %d", estado); // Guardamos en cadena la siguiente frase: estado "valor del estado"
@@ -733,15 +755,17 @@ void main(void)
             ***********************************************************/
             switch (estado) {
                 case 1:
-                    //Si polsem S1, encenem els 3 LEDs RGB segons la distància a la que es detecta un objecte amb el sensor
-                    //process_distance(CENTRE);
-                    read_distance_wall(DRETA);
+                    //Si polsem S1, encenem els 3 LEDs RGB segons la distï¿½ncia a la que es detecta un objecte amb el sensor
+                    read_distance_wall(DRETA); //setejem els tresholds laterals
+                    moving_state = GO_STRAIGHT; //arranquem el robot
+                    activa_timerA0();
                     break;
 
                 case 2:
                     //Si polsem S2, el robot fa stop
-                    read_distance_wall(CENTRE);
                     stop_robot();
+                    moving_state = STOP;
+                    prev_moving_state = STOP;
                     break;
 
                 case 3:
@@ -755,7 +779,7 @@ void main(void)
                     break;
 
                 case 5:
-                    //Si polsem el joystick  amunt, el robot avança
+                    //Si polsem el joystick  amunt, el robot avanï¿½a
                     activa_timerA0();
                     move_robot(ENDAVANT, velocitat_lenta);
                     escribir(borrado, linea+5);          // Escribimos la cadena al LCD
@@ -769,44 +793,37 @@ void main(void)
                 case 7:
                     //Si polsem el joystick al centre, activem els leds dels motors
                     activate_led();
+                    read_distance_wall(CENTRE); //llegim el treshold del centre
                     break;
             }
         }
-        
-        
-        dataRead = moving_state_selector();
-        
+
+        if(moving_state != STOP){
+          dataRead = moving_state_selector();
+        }
+
         if (moving_state != prev_moving_state){
             prev_moving_state = moving_state;
-            
             switch (moving_state) {
-            
-                case 1:
-                    //Paret a l'esquerra
-                    follow_left(dataRead);
-                    break;
-                    
-                case 2:
-                    //Paret a la dreta
-                    follow_right(dataRead);
-                    break;
-                    
-                case 3:
-                    //Trobat paret al davant
-                    change_robot_direction(dataRead);
-                    break;
-                    
-                case 4:
-                    //Paret davant i dos costats
+                case JAILED: //Paret als tres cantons o hem arribat a un estret
                     go_back_find_way(dataRead);
                     break;
-                    
-                case 5:
-                    //Cap paret detectada
-                    open_turn(dataRead);
+                case INTERIOR_TURN: //paret al davant mentres seguiem una paret
+                    get_away();
                     break;
+                case EXTERIOR_TURN: //estavem seguint una paret i ara no hi ha res
+                    open_turn();
+                    break;
+                case TOO_NEAR: //ens apropem massa a la paret que seguiem
+                    get_away();
+                    break;
+                case TOO_CLOSE: //ens allunyem massa de la paret que seguiem
+                    get_closer();
+                    break;
+                case GO_STRAIGHT: //rang correcte amb la paret que seguiem
+                    move_robot(ENDAVANT, velocitat_lenta);
             }
-        } 
+        }
     }
     while (1); //Condicion para que el bucle sea infinito
 }
@@ -921,25 +938,25 @@ void PORT5_IRQHandler(void) { //interrupciï¿½n de los botones. Actualiza el valo
 
 void TA0_0_IRQHandler(void)
 {
-    TA0CCTL0 &= ~CCIE;//Convé inhabilitar la interrupció al començament
+    TA0CCTL0 &= ~CCIE;//Convï¿½ inhabilitar la interrupciï¿½ al comenï¿½ament
     comptador++;    //Incrementem la variable global comptador
-    TA0CCTL0 &= ~CCIFG;//Hem de netejar el flagde la interrupció
-    TA0CCTL0 |= CCIE;//S’ha d’habilitar la interrupció abans de sortir
+    TA0CCTL0 &= ~CCIFG;//Hem de netejar el flagde la interrupciï¿½
+    TA0CCTL0 |= CCIE;//Sï¿½ha dï¿½habilitar la interrupciï¿½ abans de sortir
 }
 
-//Interrupció timer TimeOut
+//Interrupciï¿½ timer TimeOut
 void TA1_0_IRQHandler(void)
 {
-    TA1CCTL0 &= ~CCIE; //Convé inhabilitar la interrupció al començament
+    TA1CCTL0 &= ~CCIE; //Convï¿½ inhabilitar la interrupciï¿½ al comenï¿½ament
     comptTimeOut++;    //Incrementem variable global seg
-    TA1CCTL0 &= ~CCIFG; //Hem de netejar el flag de la interrupció
-    TA1CCTL0 |= CCIE; //S’ha d’habilitar la interrupció abans de sortir
+    TA1CCTL0 &= ~CCIFG; //Hem de netejar el flag de la interrupciï¿½
+    TA1CCTL0 |= CCIE; //Sï¿½ha dï¿½habilitar la interrupciï¿½ abans de sortir
 }
 
-//Interrupció dada llegida UART
+//Interrupciï¿½ dada llegida UART
 void EUSCIA2_IRQHandler(void){
-    UCA2IE &= ~UCRXIE; //Convé inhabilitar la interrupció al començament
+    UCA2IE &= ~UCRXIE; //Convï¿½ inhabilitar la interrupciï¿½ al comenï¿½ament
     DadaLlegida_UART = UCA2RXBUF; //Guardem la dada llegida
     Byte_Rebut = 1;	//Posem la variable global de control a 1
-    UCA2IE |= UCRXIE; //S’ha d’habilitar la interrupció abans de sortir
+    UCA2IE |= UCRXIE; //Sï¿½ha dï¿½habilitar la interrupciï¿½ abans de sortir
 }
