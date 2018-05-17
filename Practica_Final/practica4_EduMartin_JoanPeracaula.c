@@ -28,9 +28,9 @@ uint16_t velocitat_mitja = 0x0200;
 uint16_t velocitat_rapida = 0x03ff;
 uint8_t STOP_THRESHOLD = 200;
 uint8_t threshold_center;
+uint8_t lateral_detection_threshold = 20;
 uint8_t min_threshold_lateral;
 uint8_t max_threshold_lateral;
-uint8_t object_center = 0;
 
 #define TXD2_READY (UCA2IFG & UCTXIFG)
 struct RxReturn {
@@ -310,7 +310,6 @@ void stop_motor(uint8_t id){
 }
 
 void move_robot(uint8_t sentit, uint16_t velocitat){
-    moving = 1;
     if(sentit == ENDAVANT){
         move_motor(idML,SENTIT_CCW,velocitat);
         move_motor(idMR,SENTIT_CW,velocitat);
@@ -321,7 +320,6 @@ void move_robot(uint8_t sentit, uint16_t velocitat){
 }
 
 void hard_turn_robot(uint8_t sentit, uint16_t velocitat){
-    moving = 1;
     if(sentit == ESQUERRA){
         stop_motor(idML);
         move_motor(idMR,SENTIT_CW,velocitat);
@@ -332,12 +330,22 @@ void hard_turn_robot(uint8_t sentit, uint16_t velocitat){
 }
 
 void turn_robot(uint8_t sentit, uint16_t velocitat){
-    moving = 1;
     if(sentit == ESQUERRA){
         move_motor(idML,SENTIT_CCW,velocitat);
         move_motor(idMR,SENTIT_CW,velocitat_mitja);
     } else {
         move_motor(idML,SENTIT_CW,velocitat_mitja);
+        move_motor(idMR,SENTIT_CCW,velocitat);
+    }
+}
+
+// TODO: gir 90 graus (funcions move_motor_angle)
+void turn_robot_90_degrees(uint8_t direction, uint16_t velocitat) {
+    if(sentit == ESQUERRA){
+        move_motor(idML,SENTIT_CW,velocitat);
+        move_motor(idMR,SENTIT_CW,velocitat);
+    } else {
+        move_motor(idML,SENTIT_CCW,velocitat);
         move_motor(idMR,SENTIT_CCW,velocitat);
     }
 }
@@ -401,7 +409,7 @@ void read_distance_wall(uint8_t sensor) {
     }
 }
 
-uint8_t move_objects () {
+/*uint8_t move_objects () {
     struct Data data = distance_sensor();
 
     //Delay
@@ -436,7 +444,7 @@ uint8_t move_objects () {
     }
 
     return 0;
-}
+}*/
 
 /**************************************************************************
  * INICIALIZACIï¿½N DEL CONTROLADOR DE INTERRUPCIONES (NVIC).
@@ -573,6 +581,113 @@ void init_botons(void) {
     // - Ya hay una resistencia de pullup en la placa MK II
 }
 
+struct Data moving_state_selector() {
+    Data dataRead = process_distance();
+    
+    if (dataRead.checkSum){
+        sprintf(cadena, "error checksum"); // Guardamos en cadena la siguiente frase: error checksum
+        escribir(cadena, linea+1);          // Escribimos la cadena al LCD
+        return 1;
+    } else if (dataRead.timeOut) {
+        sprintf(cadena, "error timeout"); // Guardamos en cadena la siguiente frase: error timeout
+        escribir(cadena, linea+1);          // Escribimos la cadena al LCD
+        return 1;
+    }
+
+    if (wall_on_left(dataRead.dades)) {
+        moving_state = 1;
+    } else if (wall_on_right(dataRead.dades)) {
+        moving_state = 2;
+    } else if (wall_on_front(dataRead.dades)) {
+        moving_state = 3;
+    } else if (wall_on_front_left_right(dataRead.dades)) {
+        moving_state = 4;
+    } else {
+        //Cap paret a davant
+        moving_state = 5;
+    }
+    
+    return dataRead;
+}
+
+void follow_left(Data dataRead) {
+    
+    if (dataRead.dades[0] > max_threshold_lateral) {
+        hard_turn_robot(DRETA, velocitat_lenta);
+    } else if (dataRead.dades[0] < min_threshold_lateral) {
+        hard_turn_robot(ESQUERRA, velocitat_lenta);
+    } else {
+        move_robot(ENDAVANT, velocitat_lenta);
+    }
+    
+}
+
+void follow_right(Data dataRead) {
+    
+    if (dataRead.dades[2] > max_threshold_lateral) {
+        hard_turn_robot(ESQUERRA, velocitat_lenta);
+    } else if (dataRead.dades[2] < min_threshold_lateral) {
+        hard_turn_robot(DRETA, velocitat_lenta);
+    } else {
+        move_robot(ENDAVANT, velocitat_lenta);
+    }
+    
+}
+
+void change_robot_direction(Data dataRead) {
+    
+    if (prev_moving_state == 1) { //Venim de paret a l'esquerra
+        turn_robot(ESQUERRA, velocitat_lenta);
+    } else if (prev_moving_state == 2) { //Venim de paret a la dreta
+        turn_robot(ESQUERRA, velocitat_lenta);
+    }
+    
+}
+
+uint8_t delay (uint8_t limit) {
+    return comptador < limit;
+}
+
+void go_back_find_way(Data dataRead) {
+
+    uint8_t sensor;
+    uint8_t direction;
+    
+    if (prev_moving_state == 1) { //Venim de paret a l'esquerra
+        sensor = 2;
+        direction = ESQUERRA;
+    } else if (prev_moving_state == 2) { //Venim de paret a la dreta
+        sensor = 0;
+        direction = DRETA;
+    }
+    
+    while (dataRead.dades[sensor] < lateral_detection_threshold) {
+        move_robot(ENDARRERE, velocitat_lenta);
+        dataRead = process_distance();
+    }
+    
+    turn_robot_90_degrees(direction, velocitat_lenta);
+    
+    comptador = 0;
+    while (delay(1000)); //Temps de gir 90 graus a velocitat_lenta
+    
+    move_robot(ENDAVANT, velocitat_lenta);
+    
+    comptador = 0;
+    while (delay(1000)); //Temps de gir abans de trobar la paret de nou
+}
+
+void open_turn(Data dataRead) {
+    comptador = 0;
+    while (delay(1000)); //Petit delay per agafar millor la curva
+    
+    if (prev_moving_state == 1) { //Venim de paret a l'esquerra
+        turn_robot(ESQUERRA, velocitat_lenta);
+    } else if (prev_moving_state == 2) { //Venim de paret a la dreta
+        turn_robot(DRETA, velocitat_lenta);
+    }
+}
+
 void main(void)
 {
 
@@ -593,11 +708,11 @@ void main(void)
     //Bucle principal (infinito):
     do
     {
-        if(moving && comptador >= 50 ){
+        /*if(moving && comptador >= 50 ){
             process_distance(ESQUERRA);
             error = move_objects();
             comptador = 0;
-        }
+        }*/
         if (estado_anterior != estado)// Dependiendo del valor del estado se encenderï¿½ un LED u otro.
         {
             sprintf(cadena, "estado %d", estado); // Guardamos en cadena la siguiente frase: estado "valor del estado"
@@ -615,49 +730,81 @@ void main(void)
             Joystick down, estado = 6
             Joystick center, estado = 7
             ***********************************************************/
-            switch (estado)
-            {
-            case 1:
-                //Si polsem S1, encenem els 3 LEDs RGB segons la distància a la que es detecta un objecte amb el sensor
-                //process_distance(CENTRE);
-                read_distance_wall(DRETA);
-                break;
+            switch (estado) {
+                case 1:
+                    //Si polsem S1, encenem els 3 LEDs RGB segons la distància a la que es detecta un objecte amb el sensor
+                    //process_distance(CENTRE);
+                    read_distance_wall(DRETA);
+                    break;
 
-            case 2:
-                //Si polsem S2, el robot fa stop
-                read_distance_wall(CENTRE);
-                stop_robot();
-                break;
+                case 2:
+                    //Si polsem S2, el robot fa stop
+                    read_distance_wall(CENTRE);
+                    stop_robot();
+                    break;
 
-            case 3:
-                //Si polsem el joystick  a l'esquerra, el robot gira sobre si mateix cap a l'esquerra
-                turn_robot(ESQUERRA, velocitat_lenta);
-                break;
+                case 3:
+                    //Si polsem el joystick  a l'esquerra, el robot gira sobre si mateix cap a l'esquerra
+                    turn_robot(ESQUERRA, velocitat_lenta);
+                    break;
 
-            case 4:
-                //Si polsem el joystick  a la dreta, el robot gira sobre si mateix cap a la dreta
-                turn_robot(DRETA, velocitat_lenta);
-                break;
+                case 4:
+                    //Si polsem el joystick  a la dreta, el robot gira sobre si mateix cap a la dreta
+                    turn_robot(DRETA, velocitat_lenta);
+                    break;
 
-            case 5:
-                //Si polsem el joystick  amunt, el robot avança
-                activa_timerA0();
-                move_robot(ENDAVANT, velocitat_lenta);
-                escribir(borrado, linea+5);          // Escribimos la cadena al LCD
-                break;
+                case 5:
+                    //Si polsem el joystick  amunt, el robot avança
+                    activa_timerA0();
+                    move_robot(ENDAVANT, velocitat_lenta);
+                    escribir(borrado, linea+5);          // Escribimos la cadena al LCD
+                    break;
 
-            case 6:
-                //Si polsem el joystick  avall, el robot retrocedeix
-                move_robot(ENDARRERE, velocitat_lenta);
-                break;
+                case 6:
+                    //Si polsem el joystick  avall, el robot retrocedeix
+                    move_robot(ENDARRERE, velocitat_lenta);
+                    break;
 
-            case 7:
-                //Si polsem el joystick al centre, activem els leds dels motors
-            	activate_led();
-                break;
+                case 7:
+                    //Si polsem el joystick al centre, activem els leds dels motors
+                    activate_led();
+                    break;
             }
         }
-
+        
+        Data dataRead = moving_state_selector();
+        
+        if (moving_state != prev_moving_state){
+            prev_moving_state = moving_state;
+            
+            switch (moving_state) {
+            
+                case 1:
+                    //Paret a l'esquerra
+                    follow_left(dataRead);
+                    break;
+                    
+                case 2:
+                    //Paret a la dreta
+                    follow_right(dataRead);
+                    break;
+                    
+                case 3:
+                    //Trobat paret al davant
+                    change_robot_direction(dataRead);
+                    break;
+                    
+                case 4:
+                    //Paret davant i dos costats
+                    go_back_find_way(dataRead);
+                    break;
+                    
+                case 5:
+                    //Cap paret detectada
+                    open_turn(dataRead);
+                    break;
+            }
+        } 
     }
     while (1); //Condicion para que el bucle sea infinito
 }
