@@ -123,11 +123,11 @@ void Reset_TimeOut(void){
     comptTimeOut = 0;
 }
 
-uint8_t delay (uint8_t limit) {
+uint8_t delay_timer (uint32_t limit) {
     return comptador < limit;
 }
 
-void reset_delay() {
+void reset_delay_timer() {
   comptador = 0;
 }
 
@@ -248,7 +248,7 @@ struct RxReturn RxPacket(void){
 
 struct RxReturn read_IR_sensor(void) {
     byte parametres[2];
-    parametres[0] = 0x1A;  //Adre�a Left IR Sensor Data
+    parametres[0] = 0x1A;  //Adreca Left IR Sensor Data
     parametres[1] = 0x03;   //Llegim tres bytes: Left, Center i Right
     TxPacket(idS,0x02,READ,parametres);
     return RxPacket();
@@ -267,9 +267,7 @@ struct Data distance_sensor(){
     return data;
 }
 
-void process_distance(uint8_t sensor) {
-    struct Data data = distance_sensor();
-    byte value = data.dades[sensor];
+void process_distance(struct Data data) {
 
     if (data.checkSum){
         sprintf(cadena, "error checksum"); // Guardamos en cadena la siguiente frase: error checksum
@@ -283,21 +281,6 @@ void process_distance(uint8_t sensor) {
         //LED RGB blanc
         P2OUT |= 0x50;  //Leds P2.4 (G), 2.6 (R) a 1 (encesos)
         P5OUT |= 0x40; //Led P5.6(B) a 1 (ences)
-    } else if (value < 40) {
-        //LED RGB verd
-        P2OUT |= 0x10;  //Led P2.4 (G) a 1 (ences)
-        P5OUT &= ~0x40; //Led P5.6(B) a 0 (apagat)
-        P2OUT &= ~0x40;  //Led P2.6 (R) a 0 (apagat)
-    } else if (value < 200) {
-        //LED RGB groc
-        P2OUT |= 0x40;  //Led P2.6 (R) a 1 (ences)
-        P2OUT |= 0x10;  //Led P2.4 (G) a 1 (ences)
-        P5OUT &= ~0x40; //Led P5.6 (B) a 0 (apagat)
-    } else {
-        //LED RGB vermell
-        P2OUT |= 0x40;  //Led P2.6 (R) a 1 (ences)
-        P2OUT &= ~0x10;  //Led P2.4 (G) a 0 (apagat)
-        P5OUT &= ~0x40; //Led P5.6(B) a 0 (apagat)
     }
     sprintf(cadena, "LEFT %03d", data.dades[0]); // Guardamos en cadena la siguiente frase: error checksum
     escribir(cadena, linea+2);          // Escribimos la cadena al LCD
@@ -375,8 +358,8 @@ void turn_robot(uint8_t sentit, uint16_t velocitat){
         move_motor(idML,SENTIT_CCW,velocitat);
         move_motor(idMR,SENTIT_CW,velocitat_mitja);
     } else {
-        move_motor(idML,SENTIT_CW,velocitat_mitja);
-        move_motor(idMR,SENTIT_CCW,velocitat);
+        move_motor(idML,SENTIT_CCW,velocitat_mitja);
+        move_motor(idMR,SENTIT_CW,velocitat);
     }
 }
 
@@ -444,13 +427,13 @@ void read_distance_wall(uint8_t sensor) {
     uint8_t distancia = data.dades[sensor];
     if (sensor == CENTRE) {
         threshold_center = distancia;
-        sprintf(cadena, "Center done "); // Guardamos en cadena la siguiente frase: error checksum
+        sprintf(cadena, "Center: %03d", distancia); // Guardamos en cadena la siguiente frase: error checksum
         escribir(cadena, linea+5);          // Escribimos la cadena al LCD
     } else {
         min_threshold_lateral = distancia;
         max_threshold_lateral = distancia + distancia/10;
-        sprintf(cadena, "Lateral done"); // Guardamos en cadena la siguiente frase: error checksum
-        escribir(cadena, linea+5);          // Escribimos la cadena al LCD
+        sprintf(cadena, "Lateral: %03d", distancia); // Guardamos en cadena la siguiente frase: error checksum
+        escribir(cadena, linea+6);          // Escribimos la cadena al LCD
     }
 }
 
@@ -590,10 +573,10 @@ void init_botons(void) {
 }
 
 uint8_t wall_jailing(byte dades[3]){ //jail
-  return dades[0] >= max_threshold_lateral && dades[1] >= threshold_center && dades[2] >= threshold_center;
+  return dades[0] > max_threshold_lateral && dades[1] > threshold_center && dades[2] > max_threshold_lateral;
 }
 uint8_t wall_narrow_path(byte dades[3]){ //narrowing sides
-  return dades[0] >= max_threshold_lateral && dades[2] >= max_threshold_lateral ;
+  return dades[0] > max_threshold_lateral && dades[2] > max_threshold_lateral ;
 }
 uint8_t wall_on_front(byte dades[3]){ //inner turn
   return dades[1] >= threshold_center;
@@ -606,6 +589,10 @@ uint8_t wall_on_side_too_far(byte dades[3]){ //get closer to the wall
 }
 uint8_t wall_on_side_perfect(byte dades[3]){ //go straight
   return dades[sideWall] < max_threshold_lateral && dades[sideWall] > min_threshold_lateral;
+}
+
+uint8_t no_wall(byte dades[3]){
+  return dades[sideWall] < lateral_detection_threshold && dades[1] < threshold_center;
 }
 
 struct Data moving_state_selector() {
@@ -629,17 +616,19 @@ struct Data moving_state_selector() {
         //en un futur podriem afegir un estat que sigui "busca paret" llavors necessiteriem un if
     } else if (wall_on_side_TOO_FAR(dataRead.dades)) {
         moving_state = TOO_CLOSE; //si ens allunyem del mur definit per la variable global, apropat
-    } else if (wall_on_side_too_far(dataRead.dades)) {
-        moving_state = TOO_FAR; //si ens apropem del mur definit per la variable global, allunyat
-    } else if (wall_on_side_perfect(dataRead.dades)) {
+    }  /*else if (wall_on_side_perfect(dataRead.dades)) {
         moving_state = GO_STRAIGHT; //si tenim una bona distancia amb la paret segueix recta
-    } else{
-        if(prev_moving_state == GO_STRAIGHT || prev_moving_state == TOO_CLOSE || prev_moving_state == TOO_FAR){
+    }*/ else if (no_wall(dataRead.dades)) {
+        //if(prev_moving_state == GO_STRAIGHT || prev_moving_state == TOO_CLOSE || prev_moving_state == TOO_FAR){
             moving_state = EXTERIOR_TURN;
             //si estavem seguint una paret i de cop i volta no hi ha res, vol dir que estavem
             //reseguint una cantonada per l'exterior
-        }
+        //}
         //TODO: pdriem afegir un altre estat que sigui "buscar paret" des del mig de lhabitacio
+    } else if (wall_on_side_too_far(dataRead.dades)) {
+        moving_state = TOO_FAR; //si ens apropem del mur definit per la variable global, allunyat
+    } else{
+        moving_state = GO_STRAIGHT;
     }
 
     return dataRead;
@@ -653,9 +642,9 @@ struct Data moving_state_selector() {
 */
 void get_away() {
     if (sideWall == ESQUERRA) { //Venim de paret a l'esquerra
-        turn_robot(DRETA, velocitat_lenta);
+        hard_turn_robot(DRETA, velocitat_lenta);
     } else { //Venim de paret a la dreta
-        turn_robot(ESQUERRA, velocitat_lenta);
+        hard_turn_robot(ESQUERRA, velocitat_lenta);
     }
 
 }
@@ -674,6 +663,23 @@ void get_closer() {
 
 }
 
+/*
+*Aquesta funcio la utilitzem per que el robot giri cap al canto contrari de la paret
+*que estava seguint.
+*No fa res més que invertir la direcció que porta el robot i crida a una altra funcio de girar
+*/
+void interior_turn() {
+
+    if (sideWall == ESQUERRA) { //Venim de paret a l'esquerra
+        hard_turn_robot(DRETA, velocitat_lenta);
+    } else { //Venim de paret a la dreta
+        hard_turn_robot(ESQUERRA, velocitat_lenta);
+    }
+
+    reset_delay_timer();
+    while (delay_timer(500)); //Petit delay_timer per agafar millor la curva
+}
+
 /* Metode que utilitzem per guiar al robot fora de obstacles en forma de C o passos estrets.
 * Aquest metode pot ser molt util per quan no hi hagi suficient espai com per girar sobre si mateix.
 */
@@ -690,30 +696,33 @@ void go_back_find_way(struct Data dataRead) {
         direction = ESQUERRA;
     }
 
-    while (dataRead.dades[sensor] < lateral_detection_threshold) { //mentres estiguem encara engarjolats
+    while (dataRead.dades[sensor] > max_threshold_lateral) { //mentres estiguem encara engarjolats
         move_robot(ENDARRERE, velocitat_lenta);
         dataRead = distance_sensor();
     }
 
     turn_robot_90_degrees(direction, velocitat_lenta); //girarem 90 graus en direccio del sensor
-    reset_delay();
-    while (delay(1000)); //Temps de gir 90 graus a velocitat_lenta
+    reset_delay_timer();
+    while (delay_timer(1000)); //Temps de gir 90 graus a velocitat_lenta
 
     move_robot(ENDAVANT, velocitat_lenta); //ens apropem a lobstacle
-    reset_delay();
-    while (delay(1000)); //Temps de gir abans de trobar la paret de nou
+    reset_delay_timer();
+    while (delay_timer(1000)); //Temps de gir abans de trobar la paret de nou
 }
 
 /*Aquest metode el fem per fer girs exteriors
-* El delay es per deixar prou marge amb la cantonada
+* El delay_timer es per deixar prou marge amb la cantonada
 */
 void open_turn() {
-    reset_delay();
-    while (delay(1000)); //Petit delay per agafar millor la curva
+    if (prev_moving_state != EXTERIOR_TURN) {
+        reset_delay_timer();
+        while (delay_timer(1000)); //Petit delay_timer per agafar millor la curva
+    }
+
     if (sideWall == ESQUERRA) { //Venim de paret a l'esquerra
-        turn_robot(ESQUERRA, velocitat_lenta);
+        hard_turn_robot(ESQUERRA, velocitat_lenta);
     } else { //Venim de paret a la dreta
-        turn_robot(DRETA, velocitat_lenta);
+        hard_turn_robot(DRETA, velocitat_lenta);
     }
 }
 
@@ -732,7 +741,6 @@ void main(void)
     halLcdPrintLine(saludo, linea, INVERT_TEXT); //escribimos saludo en la primera linea
     linea++; //Aumentamos el valor de linea y con ello pasamos a la linea siguiente
     init_UART();
-    uint8_t error = 0;
     struct Data dataRead;
 
     //Bucle principal (infinito):
@@ -766,18 +774,24 @@ void main(void)
                 case 2:
                     //Si polsem S2, el robot fa stop
                     stop_robot();
+                    read_distance_wall(CENTRE); //llegim el threshold del centre
                     moving_state = STOP;
                     prev_moving_state = STOP;
                     break;
 
                 case 3:
                     //Si polsem el joystick  a l'esquerra, el robot gira sobre si mateix cap a l'esquerra
-                    turn_robot(ESQUERRA, velocitat_lenta);
+                    //turn_robot(ESQUERRA, velocitat_lenta);
+                    //turn_robot_90_degrees(ESQUERRA, velocitat_lenta);
+                    activa_timerA0();
+                    interior_turn();
+                    stop_robot();
                     break;
 
                 case 4:
                     //Si polsem el joystick  a la dreta, el robot gira sobre si mateix cap a la dreta
-                    turn_robot(DRETA, velocitat_lenta);
+                    hard_turn_robot(DRETA, velocitat_lenta);
+                    //turn_robot_90_degrees(DRETA, velocitat_lenta);
                     break;
 
                 case 5:
@@ -795,13 +809,14 @@ void main(void)
                 case 7:
                     //Si polsem el joystick al centre, activem els leds dels motors
                     activate_led();
-                    read_distance_wall(CENTRE); //llegim el treshold del centre
+                    //read_distance_wall(CENTRE); //llegim el treshold del centre
                     break;
             }
         }
 
         if(moving_state != STOP){
           dataRead = moving_state_selector();
+          process_distance(dataRead);
         }
 
         if (moving_state != prev_moving_state){
@@ -811,7 +826,7 @@ void main(void)
                     go_back_find_way(dataRead);
                     break;
                 case INTERIOR_TURN: //paret al davant mentres seguiem una paret
-                    get_away();
+                    interior_turn();
                     break;
                 case EXTERIOR_TURN: //estavem seguint una paret i ara no hi ha res
                     open_turn();
@@ -959,6 +974,6 @@ void TA1_0_IRQHandler(void)
 void EUSCIA2_IRQHandler(void){
     UCA2IE &= ~UCRXIE; //Conv� inhabilitar la interrupci� al comen�ament
     DadaLlegida_UART = UCA2RXBUF; //Guardem la dada llegida
-    Byte_Rebut = 1;	//Posem la variable global de control a 1
+    Byte_Rebut = 1; //Posem la variable global de control a 1
     UCA2IE |= UCRXIE; //S�ha d�habilitar la interrupci� abans de sortir
 }
