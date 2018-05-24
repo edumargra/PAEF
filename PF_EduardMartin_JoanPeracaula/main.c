@@ -411,6 +411,12 @@ struct Data luminosity_sensor() {
 */
 
 
+void config_P7_LEDS (void)
+{
+    P7DIR |= 0xFF;  //Tots els pins del port 7 configurats com a sortides
+    P7OUT &= 0x00;  //Inicialitzem els leds del port 7 a 0 (apagats)
+}
+
 /**************************************************************************
  * INICIALIZACI�N DEL CONTROLADOR DE INTERRUPCIONES (NVIC).
  *
@@ -699,8 +705,10 @@ void get_closer() {
 void interior_turn() {
 
     if (sideWall == ESQUERRA) { //Venim de paret a l'esquerra
+    	switch_on_leds_turn(DRETA);
         hard_turn_robot(DRETA, velocitat_lenta);
     } else { //Venim de paret a la dreta
+    	switch_on_leds_turn(ESQUERRA);
         hard_turn_robot(ESQUERRA, velocitat_lenta);
     }
 
@@ -722,8 +730,10 @@ void turn_robot_90_degrees(){
 
     if (sideWall == ESQUERRA) { 
         direction = DRETA;
+        switch_on_leds_turn(DRETA);
     } else if (sideWall == DRETA) {
         direction = ESQUERRA;
+        switch_on_leds_turn(ESQUERRA);
     }
     turn_on_itself(direction, velocitat_lenta); //girarem 90 graus en direccio del sensor
     reset_delay_timer();
@@ -742,8 +752,10 @@ void move_forward(){
 void open_turn() {
     if (sideWall == ESQUERRA) { //Venim de paret a l'esquerra
         hard_turn_robot(ESQUERRA, velocitat_lenta);
+    	switch_on_leds_turn(ESQUERRA);
     } else { //Venim de paret a la dreta
         hard_turn_robot(DRETA, velocitat_lenta);
+        switch_on_leds_turn(DRETA);
     }
 }
 
@@ -760,6 +772,18 @@ void process_sound(){
     }
 }
 
+void switch_on_leds_turn(uint8_t direction) {
+	if (direction == ESQUERRA) {
+		P7OUT = 0x0F;
+	} else {
+		P7OUT = 0xF0;
+	}
+}
+
+void switch_off_leds() {
+	P7OUT &= 0x00;
+}
+
 void main(void)
 {
 
@@ -769,6 +793,7 @@ void main(void)
     init_ucs_24MHz();       //Ajustes del clock (Unified Clock System)
     init_botons();         //Configuramos botones y leds
     init_LCD();             // Inicializamos la pantalla
+    config_P7_LEDS(); //Inicialitzem els leds del port 7 i els apaguem
     init_timer_TA0();   //inicialitzem el timer TA0
     init_timer_TA1();   //inicialitzem el timer TA1
     init_interrupciones();  //Configurar y activar las interrupciones de los botones
@@ -853,6 +878,7 @@ void main(void)
         
         if(!delay_timer()){
             desactiva_timerA0();
+            switch_off_leds();
             
             if (moving_state != prev_moving_state){
                 prev_moving_state = moving_state;
