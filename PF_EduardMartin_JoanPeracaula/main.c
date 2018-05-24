@@ -48,9 +48,9 @@ struct Data {
 };
 
 //IDs
-uint8_t idML = 0x03;
-uint8_t idMR = 0x02;
-uint8_t idS = 0x64;
+#define idML 0x03
+#define idMR 0x02
+#define idS 0x64
 
 //Definicions (instruccions m�duls, adreces i constants)
 #define WRITE 0x03
@@ -275,28 +275,7 @@ struct Data distance_sensor(){
     return data;
 }
 
-void process_distance(struct Data data) {
 
-    if (data.checkSum){
-        sprintf(cadena, "error checksum"); // Guardamos en cadena la siguiente frase: error checksum
-        escribir(cadena, linea+1);          // Escribimos la cadena al LCD
-        //LED RGB blanc
-        P2OUT |= 0x50;  //Leds P2.4 (G), 2.6 (R) a 1 (encesos)
-        P5OUT |= 0x40; //Led P5.6(B) a 1 (ences)
-    } else if (data.timeOut) {
-        sprintf(cadena, "error timeout"); // Guardamos en cadena la siguiente frase: error timeout
-        escribir(cadena, linea+1);          // Escribimos la cadena al LCD
-        //LED RGB blanc
-        P2OUT |= 0x50;  //Leds P2.4 (G), 2.6 (R) a 1 (encesos)
-        P5OUT |= 0x40; //Led P5.6(B) a 1 (ences)
-    }
-    sprintf(cadena, "LEFT %03d", data.dades[0]); // Guardamos en cadena la siguiente frase: error checksum
-    escribir(cadena, linea+2);          // Escribimos la cadena al LCD
-    sprintf(cadena, "CENTER %03d", data.dades[1]); // Guardamos en cadena la siguiente frase: error checksum
-    escribir(cadena, linea+3);          // Escribimos la cadena al LCD
-    sprintf(cadena, "RIGHT %03d", data.dades[2]); // Guardamos en cadena la siguiente frase: error checksum
-    escribir(cadena, linea+4);          // Escribimos la cadena al LCD
-}
 
 //activem els leds dels motors
 void activate_led(void) {
@@ -372,7 +351,7 @@ void turn_robot(uint8_t sentit, uint16_t velocitat){
 }
 
 // TODO: gir 90 graus (funcions move_motor_angle)
-void turn_robot_90_degrees(uint8_t direction, uint16_t velocitat) {
+void turn_on_itself(uint8_t direction, uint16_t velocitat) {
     if(direction == ESQUERRA){
         move_motor(idML,SENTIT_CW,velocitat);
         move_motor(idMR,SENTIT_CW,velocitat);
@@ -430,20 +409,7 @@ struct Data luminosity_sensor() {
 *  Diferenciem entre el del centre i els laterals, tenin especial cura d aquest ultims, afegint
 *  una tolerancia d un 10 per cent.
 */
-void read_distance_wall(uint8_t sensor) {
-    struct Data data = distance_sensor();
-    uint8_t distancia = data.dades[sensor];
-    if (sensor == CENTRE) {
-        threshold_center = distancia;
-        sprintf(cadena, "Center: %03d", distancia); // Guardamos en cadena la siguiente frase: error checksum
-        escribir(cadena, linea+5);          // Escribimos la cadena al LCD
-    } else {
-        min_threshold_lateral = distancia;
-        max_threshold_lateral = distancia + distancia/10;
-        sprintf(cadena, "Lateral: %03d", distancia); // Guardamos en cadena la siguiente frase: error checksum
-        escribir(cadena, linea+6);          // Escribimos la cadena al LCD
-    }
-}
+
 
 /**************************************************************************
  * INICIALIZACI�N DEL CONTROLADOR DE INTERRUPCIONES (NVIC).
@@ -580,6 +546,44 @@ void init_botons(void) {
     // - Ya hay una resistencia de pullup en la placa MK II
 }
 
+void read_distance_wall(uint8_t sensor) {
+    struct Data data = distance_sensor();
+    uint8_t distancia = data.dades[sensor];
+    if (sensor == CENTRE) {
+        threshold_center = distancia;
+        sprintf(cadena, "Center: %03d", distancia); // Guardamos en cadena la siguiente frase: error checksum
+        escribir(cadena, linea+5);          // Escribimos la cadena al LCD
+    } else {
+        min_threshold_lateral = distancia;
+        max_threshold_lateral = distancia + distancia/10;
+        sprintf(cadena, "Lateral: %03d", distancia); // Guardamos en cadena la siguiente frase: error checksum
+        escribir(cadena, linea+6);          // Escribimos la cadena al LCD
+    }
+}
+
+void process_distance(struct Data data) {
+
+    if (data.checkSum){
+        sprintf(cadena, "error checksum"); // Guardamos en cadena la siguiente frase: error checksum
+        escribir(cadena, linea+1);          // Escribimos la cadena al LCD
+        //LED RGB blanc
+        P2OUT |= 0x50;  //Leds P2.4 (G), 2.6 (R) a 1 (encesos)
+        P5OUT |= 0x40; //Led P5.6(B) a 1 (ences)
+    } else if (data.timeOut) {
+        sprintf(cadena, "error timeout"); // Guardamos en cadena la siguiente frase: error timeout
+        escribir(cadena, linea+1);          // Escribimos la cadena al LCD
+        //LED RGB blanc
+        P2OUT |= 0x50;  //Leds P2.4 (G), 2.6 (R) a 1 (encesos)
+        P5OUT |= 0x40; //Led P5.6(B) a 1 (ences)
+    }
+    sprintf(cadena, "LEFT %03d", data.dades[0]); // Guardamos en cadena la siguiente frase: error checksum
+    escribir(cadena, linea+2);          // Escribimos la cadena al LCD
+    sprintf(cadena, "CENTER %03d", data.dades[1]); // Guardamos en cadena la siguiente frase: error checksum
+    escribir(cadena, linea+3);          // Escribimos la cadena al LCD
+    sprintf(cadena, "RIGHT %03d", data.dades[2]); // Guardamos en cadena la siguiente frase: error checksum
+    escribir(cadena, linea+4);          // Escribimos la cadena al LCD
+}
+
 uint8_t wall_jailing(byte dades[3]){ //jail
   return dades[0] > max_threshold_lateral && dades[1] > threshold_center && dades[2] > max_threshold_lateral;
 }
@@ -644,7 +648,7 @@ struct Data moving_state_selector() {
     } else if (wall_on_side_too_close(dataRead.dades)) {
         moving_state = TOO_CLOSE; //si ens allunyem del mur definit per la variable global, apropat
     } else if (no_wall(dataRead.dades)) {
-        if(prev_state != GO_STRAIGHT_NO_SENSOR){
+        if(prev_moving_state != GO_STRAIGHT_NO_SENSOR){
             moving_state = GO_STRAIGHT_NO_SENSOR;
         }else{
             moving_state = EXTERIOR_TURN;
@@ -721,7 +725,7 @@ void turn_robot_90_degrees(){
     } else if (sideWall == DRETA) {
         direction = ESQUERRA;
     }
-    turn_robot_90_degrees(direction, velocitat_lenta); //girarem 90 graus en direccio del sensor
+    turn_on_itself(direction, velocitat_lenta); //girarem 90 graus en direccio del sensor
     reset_delay_timer();
     limit_comptador = 1000;
 }
