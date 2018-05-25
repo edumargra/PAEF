@@ -275,6 +275,20 @@ struct Data distance_sensor(){
     return data;
 }
 
+void buzzer_sound(){
+	byte nota = 0x05;  // Nota musical (re)
+	byte temps = 0x0A; // 1 segon de duració de la nota
+
+	byte parametres[3];
+	parametres[0] = 0x28; // Adreça del buzzer
+    parametres[1] = nota;
+    parametres[2] = temps;
+    for (int i=0; i<10; i++) {
+    	TxPacket(idS,0x02,WRITE,parametres);
+    	t=0;
+    	while(t<5000){t++;} // Delay
+    }
+}
 
 
 //activem els leds dels motors
@@ -721,6 +735,7 @@ void interior_turn() {
 */
 void go_back() {
     move_robot(ENDARRERE, velocitat_lenta);
+    buzzer_sound();
     reset_delay_timer();
     limit_comptador = 1000;
 }
